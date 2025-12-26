@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+
+  html,
+  body {
+    @apply h-full overflow-hidden bg-transparent;
+  }
+
+  #root {
+    @apply h-full w-full bg-transparent flex items-end justify-end;
+  }
+}
+
+/* Custom scrollbar for history list */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

@@ -167,8 +167,8 @@ ipcMain.handle('minimize-app', () => {
 ipcMain.handle('close-app', () => { app.quit(); });
 
 
-// PICKING
-ipcMain.handle('start-picking', async () => {
+// PICKING LOGIC
+async function executeStartPicking() {
     try {
         if (!overlayWindow) createPersistentOverlay();
 
@@ -199,23 +199,28 @@ ipcMain.handle('start-picking', async () => {
         if (mainWindow) {
             mainWindow.setAlwaysOnTop(true, 'screen-saver');
             mainWindow.moveTop();
+            mainWindow.webContents.send('start-picking-ui'); // Tell frontend picking started
         }
 
     } catch (e) {
         console.error('Capture failed', e);
         if (mainWindow) mainWindow.webContents.send('stop-picking-ui');
     }
-});
+}
 
-ipcMain.handle('stop-picking', () => {
+function executeStopPicking() {
     if (overlayWindow) {
         overlayWindow.hide();
     }
     if (mainWindow) {
         mainWindow.setAlwaysOnTop(true, 'normal'); // Reset
         mainWindow.focus(); // FOCUS to allow Space-Start
+        mainWindow.webContents.send('stop-picking-ui'); // Tell frontend picking stopped
     }
-});
+}
+
+ipcMain.handle('start-picking', () => executeStartPicking());
+ipcMain.handle('stop-picking', () => executeStopPicking());
 
 // COLOR
 ipcMain.handle('color-picked', (event, hex) => {
@@ -233,12 +238,16 @@ app.whenReady().then(() => {
     // SAFETY NET: ESC closes overlay
     globalShortcut.register('Escape', () => {
         if (overlayWindow && overlayWindow.isVisible()) {
-            overlayWindow.hide();
-            if (mainWindow) {
-                mainWindow.webContents.send('stop-picking-ui');
-                mainWindow.setAlwaysOnTop(true, 'normal');
-                mainWindow.focus();
-            }
+            executeStopPicking();
+        }
+    });
+
+    // GLOBAL SHORTCUT: Ctrl+Shift+Space to toggle picking
+    globalShortcut.register('CommandOrControl+Shift+Space', () => {
+        if (overlayWindow && overlayWindow.isVisible()) {
+            executeStopPicking();
+        } else {
+            executeStartPicking();
         }
     });
 });

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onColorSelected: (callback) => ipcRenderer.on('color-selected', (event, hex) => callback(hex)),
     onColorHover: (callback) => ipcRenderer.on('color-hover', (event, hex) => callback(hex)),
 
-    // NEW: Sync UI state when picking stops externally (Esc key)
+    // NEW: Sync UI state when picking starts/stops externally
+    onStartPickingUI: (callback) => ipcRenderer.on('start-picking-ui', () => callback()),
     onStopPickingUI: (callback) => ipcRenderer.on('stop-picking-ui', () => callback())
 });

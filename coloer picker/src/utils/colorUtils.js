@@ -65,6 +65,23 @@ export const rgbToCmyk = (r, g, b) => {
     };
 };
 
+export const hslToRgb = (h, s, l) => {
+    s /= 100;
+    l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return {
+        r: Math.round(255 * f(0)),
+        g: Math.round(255 * f(8)),
+        b: Math.round(255 * f(4))
+    };
+};
+
+export const rgbToHex = (r, g, b) => {
+    return "#" + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1).toUpperCase();
+};
+
 // Generate Scientific Harmonies
 export const generateHarmonies = (hex) => {
     const rgb = hexToRgb(hex);

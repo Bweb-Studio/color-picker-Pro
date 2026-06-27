@@ -4,6 +4,7 @@ import { EyeDropperIcon, MoonIcon, SunIcon, XMarkIcon, MinusIcon, ClipboardDocum
 import { hexToRgb, rgbToHsl, rgbToCmyk, generateHarmonies, getContrastColor } from '../utils/colorUtils';
 import { getColorName } from '../utils/colorNaming';
 import HistoryList from './HistoryList';
+import ColorMixer from './ColorMixer';
 
 const ColorWidget = ({ onMinimize }) => {
     const [color, setColor] = useState('#ffffff');
@@ -18,6 +19,11 @@ const ColorWidget = ({ onMinimize }) => {
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saveName, setSaveName] = useState('');
     const [showResetModal, setShowResetModal] = useState(false);
+
+    // NEW FEATURES STATE
+    const [gradientSelection, setGradientSelection] = useState([]);
+    const [editingColor, setEditingColor] = useState(null);
+    const [isDraggingImage, setIsDraggingImage] = useState(false);
 
     useEffect(() => {
         const savedHistory = localStorage.getItem('color-picker-history');
@@ -67,14 +73,16 @@ const ColorWidget = ({ onMinimize }) => {
         const removeSelected = window.electronAPI.onColorSelected((hex) => {
             setColor(hex);
             setHistory(prev => {
-                if (prev.length > 0 && prev[0].hex === hex) return prev;
+                const hexValue = typeof prev[0] === 'object' ? prev[0].hex : prev[0];
+                if (prev.length > 0 && hexValue === hex) return prev;
                 const newItem = { hex, pinned: false };
                 const pinnedItems = prev.filter(i => i.pinned);
                 const unpinnedItems = prev.filter(i => !i.pinned);
-                const filteredUnpinned = unpinnedItems.filter(i => i.hex !== hex);
+                const filteredUnpinned = unpinnedItems.filter(i => (typeof i === 'object' ? i.hex !== hex : i !== hex));
                 return [...pinnedItems, newItem, ...filteredUnpinned].slice(0, 50);
             });
         });
+        const removeStartUI = window.electronAPI.onStartPickingUI ? window.electronAPI.onStartPickingUI(() => { setIsPicking(true); }) : () => {};
         const removeStopUI = window.electronAPI.onStopPickingUI(() => { setIsPicking(false); });
         return () => { };
     }, [isPicking]);
@@ -104,19 +112,111 @@ const ColorWidget = ({ onMinimize }) => {
     const togglePin = (targetHex) => {
         setHistory(prev => {
             return prev.map(item => {
-                if (item.hex === targetHex) {
-                    return { ...item, pinned: !item.pinned };
+                const itemHex = typeof item === 'object' ? item.hex : item;
+                if (itemHex === targetHex) {
+                    return typeof item === 'object' ? { ...item, pinned: !item.pinned } : { hex: item, pinned: true };
                 }
                 return item;
             }).sort((a, b) => {
-                if (a.pinned === b.pinned) return 0;
-                return a.pinned ? -1 : 1;
+                const aPinned = typeof a === 'object' ? a.pinned : false;
+                const bPinned = typeof b === 'object' ? b.pinned : false;
+                if (aPinned === bPinned) return 0;
+                return aPinned ? -1 : 1;
             });
         });
     };
 
     const deleteColor = (targetHex) => {
-        setHistory(prev => prev.filter(item => item.hex !== targetHex));
+        setHistory(prev => prev.filter(item => {
+            const h = typeof item === 'object' ? item.hex : item;
+            return h !== targetHex;
+        }));
+        setGradientSelection(prev => prev.filter(h => h !== targetHex));
+    };
+
+    // GRADIENT LOGIC
+    const toggleGradientSelect = (hex) => {
+        setGradientSelection(prev => {
+            if (prev.includes(hex)) return prev.filter(h => h !== hex);
+            if (prev.length < 4) return [...prev, hex];
+            return prev;
+        });
+    };
+
+    const createGradient = () => {
+        if (gradientSelection.length < 2) return;
+        const gradientHex = `linear-gradient(90deg, ${gradientSelection.join(', ')})`;
+        const newGradient = {
+            isGradient: true,
+            colors: gradientSelection,
+            hex: gradientHex,
+            pinned: true
+        };
+        setHistory(prev => [newGradient, ...prev].slice(0, 50));
+        setGradientSelection([]);
+    };
+
+    // MIXER LOGIC
+    const handleReplaceColor = (newHex) => {
+        setHistory(prev => prev.map(item => {
+            const h = typeof item === 'object' ? item.hex : item;
+            if (h === editingColor) {
+                return typeof item === 'object' ? { ...item, hex: newHex } : newHex;
+            }
+            return item;
+        }));
+        setColor(newHex);
+        setEditingColor(null);
+    };
+
+    const handleSaveNewColor = (newHex) => {
+        setHistory(prev => [{ hex: newHex, pinned: false }, ...prev].slice(0, 50));
+        setColor(newHex);
+        setEditingColor(null);
+    };
+
+    // IMAGE EXTRACTION
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        setIsDraggingImage(true);
+    };
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        setIsDraggingImage(false);
+    };
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDraggingImage(false);
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    
+                    const colors = [];
+                    for(let i=1; i<=5; i++) {
+                        const x = Math.floor(canvas.width * (i/6));
+                        const y = Math.floor(canvas.height * (i/6));
+                        const pixel = ctx.getImageData(x, y, 1, 1).data;
+                        const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
+                        colors.push({ hex, pinned: false, sourceImage: file.name });
+                    }
+                    
+                    const newPalette = { id: Date.now(), name: file.name, colors: colors };
+                    setSavedPalettes(prev => [...prev, newPalette]);
+                    setHistory(prev => [...colors, ...prev].slice(0, 50));
+                    setColor(colors[0].hex);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
     };
 
     // Save/Load Palettes
@@ -207,12 +307,12 @@ const ColorWidget = ({ onMinimize }) => {
         setTimeout(() => setCopied(null), 1500);
     };
 
-    const rgb = hexToRgb(color) || { r: 0, g: 0, b: 0 };
-    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-    const cmyk = rgbToCmyk(rgb.r, rgb.g, rgb.b);
-    const colorName = getColorName(color);
-    const harmonies = generateHarmonies(color);
-    const textColor = getContrastColor(color); // 'black' or 'white'
+    const isGradientColor = color.includes('gradient');
+    const rgb = !isGradientColor ? (hexToRgb(color) || { r: 0, g: 0, b: 0 }) : { r: 0, g: 0, b: 0 };
+    const hsl = !isGradientColor ? rgbToHsl(rgb.r, rgb.g, rgb.b) : { h: 0, s: 0, l: 0 };
+    const cmyk = !isGradientColor ? rgbToCmyk(rgb.r, rgb.g, rgb.b) : { c: 0, m: 0, y: 0, k: 0 };
+    const colorName = !isGradientColor ? getColorName(color) : 'Dégradé CSS';
+    const textColor = !isGradientColor ? getContrastColor(color) : 'white'; // Default white for gradient text
 
     const ColorCard = ({ label, value }) => (
         <div
@@ -229,6 +329,15 @@ const ColorWidget = ({ onMinimize }) => {
 
     return (
         <div className="w-full h-full bg-white dark:bg-neutral-900 rounded-xl shadow-2xl border-2 border-gray-300 dark:border-neutral-700 overflow-hidden flex flex-col font-sans transition-colors duration-300 relative">
+
+            {editingColor && (
+                <ColorMixer
+                    initialHex={editingColor}
+                    onReplace={handleReplaceColor}
+                    onSaveNew={handleSaveNewColor}
+                    onClose={() => setEditingColor(null)}
+                />
+            )}
 
             {showExportMenu && <div className="fixed inset-0 z-40" onClick={() => setShowExportMenu(false)}></div>}
             {showSavesMenu && <div className="fixed inset-0 z-40" onClick={() => setShowSavesMenu(false)}></div>}
@@ -308,15 +417,15 @@ const ColorWidget = ({ onMinimize }) => {
                 </div>
             </div>
 
-            {/* Main Color Display (HARMONY SPLIT) */}
+            {/* Main Color Display & Image Drop Zone (50/50 SPLIT) */}
             <div className="h-32 w-full flex flex-shrink-0 border-b border-gray-200 dark:border-neutral-700">
 
-                {/* LEFT: Main Color (65%) */}
+                {/* LEFT: Main Color (50%) */}
                 <div
-                    className="w-[65%] h-full relative flex flex-col items-center justify-center transition-colors duration-200 cursor-pointer group"
-                    style={{ backgroundColor: color }}
-                    onClick={() => copyToClipboard(color.toUpperCase(), 'main')}
-                    title="Cliquez pour copier"
+                    className="w-[50%] h-full relative flex flex-col items-center justify-center transition-colors duration-200 cursor-pointer group"
+                    style={{ [isGradientColor ? 'background' : 'backgroundColor']: history.length === 0 ? 'transparent' : color }}
+                    onClick={() => { if (history.length > 0) copyToClipboard(color, 'main'); }}
+                    title={history.length === 0 ? "" : "Cliquez pour copier"}
                 >
                     {/* Pipette Button */}
                     <div className="absolute top-2 left-2 z-10" onClick={(e) => e.stopPropagation()}>
@@ -324,53 +433,39 @@ const ColorWidget = ({ onMinimize }) => {
                             onClick={togglePicking}
                             className={`p-2 rounded-lg shadow-lg backdrop-blur-md border border-white/20 transition-all active:scale-95 ${isPicking ? 'bg-red-500 text-white animate-pulse' : 'bg-white/20 hover:bg-white/30 text-current'}`}
                             title={isPicking ? "Arrêter (Espace)" : "Capturer (Espace)"}
-                            style={{ color: textColor }} // Pipette icon adapts
+                            style={{ color: history.length === 0 || isGradientColor ? 'inherit' : textColor }}
                         >
                             {isPicking ? <StopIcon className="w-5 h-5" /> : <EyeDropperIcon className="w-5 h-5" />}
                         </button>
                     </div>
 
-                    {/* Hex & Name with RAW CONTRAST */}
-                    <div className="flex flex-col items-center gap-1 z-10 pointer-events-none">
-                        {/* No backdrop, just raw text with contrast check */}
-                        <div
-                            className="font-mono text-2xl font-black select-all tracking-wider drop-shadow-sm"
-                            style={{ color: textColor }}
-                        >
-                            {copied === 'main' ? '✓ Copié!' : color.toUpperCase()}
+                    {history.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center pointer-events-none text-gray-400 dark:text-gray-500 mt-6">
+                            <span className="text-xs text-center px-4 font-bold">Prêt à capturer</span>
                         </div>
-                        <div
-                            className="text-sm font-bold opacity-90 drop-shadow-sm"
-                            style={{ color: textColor }}
-                        >
-                            {colorName}
-                        </div>
-                    </div>
-                </div>
-
-                {/* RIGHT: Harmony Stack (35%) */}
-                <div className="w-[35%] h-full flex flex-col border-l border-white/10">
-                    {harmonies.map((hColor, i) => (
-                        <div
-                            key={i}
-                            onClick={() => {
-                                setColor(hColor);
-                                setHistory(prev => {
-                                    if (prev.find(p => p.hex === hColor)) return prev;
-                                    return [...prev.filter(p => p.pinned), { hex: hColor, pinned: false }, ...prev.filter(p => !p.pinned)].slice(0, 50);
-                                });
-                            }}
-                            className="flex-1 w-full cursor-pointer hover:brightness-110 transition-all relative group"
-                            style={{ backgroundColor: hColor }}
-                            title={`Harmonie: ${hColor}`}
-                        >
-                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                                <div className="bg-black/30 backdrop-blur-sm rounded px-1 py-0.5 text-[9px] text-white font-mono shadow-md">
-                                    {i === 0 ? 'COMP' : 'SPLIT'}
-                                </div>
+                    ) : (
+                        <div className="flex flex-col items-center gap-1 z-10 pointer-events-none px-2 text-center w-full">
+                            <div className="font-mono text-xl font-black select-all tracking-wider drop-shadow-sm truncate w-full" style={{ color: isGradientColor ? 'white' : textColor }}>
+                                {copied === 'main' ? '✓ Copié!' : isGradientColor ? 'DÉGRADÉ CSS' : color.toUpperCase()}
+                            </div>
+                            <div className="text-sm font-bold opacity-90 drop-shadow-sm truncate w-full" style={{ color: isGradientColor ? 'white' : textColor }}>
+                                {isGradientColor ? 'Copier le code' : colorName}
                             </div>
                         </div>
-                    ))}
+                    )}
+                </div>
+
+                {/* RIGHT: Image Drop Zone (50%) */}
+                <div
+                    className={`w-[50%] h-full flex flex-col items-center justify-center border-l border-gray-200 dark:border-neutral-700 transition-colors ${isDraggingImage ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-gray-50 dark:bg-neutral-800 hover:bg-gray-100 dark:hover:bg-neutral-700'}`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                >
+                    <div className={`w-[90%] h-[80%] flex flex-col items-center justify-center pointer-events-none border-2 border-dashed rounded-lg transition-colors ${isDraggingImage ? 'border-blue-400 text-blue-500' : 'border-gray-300 dark:border-gray-600 text-gray-400'}`}>
+                        <span className="text-3xl mb-1">+</span>
+                        <span className="text-[10px] text-center px-2 font-bold uppercase tracking-wider">Glisser une image<br/>pour extraire</span>
+                    </div>
                 </div>
 
             </div>
@@ -378,10 +473,10 @@ const ColorWidget = ({ onMinimize }) => {
             {/* Color Codes Grid */}
             <div className="p-3 space-y-2 bg-gray-50 dark:bg-neutral-900 border-b border-gray-200 dark:border-neutral-700 flex-shrink-0">
                 <div className="grid grid-cols-2 gap-2">
-                    <ColorCard label="HEX" value={color.toUpperCase()} />
-                    <ColorCard label="RGB" value={`${rgb.r}, ${rgb.g}, ${rgb.b}`} />
-                    <ColorCard label="HSL" value={`${hsl.h}°, ${hsl.s}%, ${hsl.l}%`} />
-                    <ColorCard label="CMYK" value={`${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%`} />
+                    <ColorCard label="HEX" value={isGradientColor ? 'N/A' : color.toUpperCase()} />
+                    <ColorCard label="RGB" value={isGradientColor ? 'N/A' : `${rgb.r}, ${rgb.g}, ${rgb.b}`} />
+                    <ColorCard label="HSL" value={isGradientColor ? 'N/A' : `${hsl.h}°, ${hsl.s}%, ${hsl.l}%`} />
+                    <ColorCard label="CMYK" value={isGradientColor ? 'N/A' : `${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%`} />
                 </div>
             </div>
 
@@ -479,8 +574,30 @@ const ColorWidget = ({ onMinimize }) => {
                         )}
                     </div>
                 </div>
-                <HistoryList history={history} onSelect={setColor} onTogglePin={togglePin} onDelete={deleteColor} />
+                <HistoryList 
+                    history={history} 
+                    onSelect={setColor} 
+                    onTogglePin={togglePin} 
+                    onDelete={deleteColor} 
+                    gradientSelection={gradientSelection}
+                    onToggleGradientSelect={toggleGradientSelect}
+                    onEditColor={setEditingColor}
+                />
             </div>
+
+            {/* Gradient Creator Panel */}
+            {gradientSelection.length >= 2 && (
+                <div className="p-3 bg-white dark:bg-neutral-800 border-t border-gray-200 dark:border-neutral-700 flex flex-col gap-2 shadow-[0_-10px_20px_rgba(0,0,0,0.1)] z-20 transition-all animate-in slide-in-from-bottom-5">
+                    <div className="flex justify-between items-center px-1">
+                        <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Nouveau Dégradé ({gradientSelection.length}/4)</span>
+                        <button onClick={() => setGradientSelection([])} className="text-gray-400 hover:text-red-500 transition-colors"><XMarkIcon className="w-4 h-4" /></button>
+                    </div>
+                    <div className="h-8 rounded-lg shadow-inner w-full border border-gray-200 dark:border-neutral-700" style={{ background: `linear-gradient(90deg, ${gradientSelection.join(', ')})` }}></div>
+                    <button onClick={createGradient} className="w-full py-2 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold rounded-lg shadow-sm transition-colors mt-1">
+                        Créer le dégradé
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

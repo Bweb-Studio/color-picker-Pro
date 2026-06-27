@@ -1,6 +1,5 @@
-const { app, BrowserWindow, ipcMain, screen, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, dialog, desktopCapturer } = require('electron');
 const path = require('path');
-const screenshot = require('screenshot-desktop');
 const { autoUpdater } = require('electron-updater');
 
 // Configure auto-updater
@@ -173,9 +172,20 @@ ipcMain.handle('start-picking', async () => {
     try {
         if (!overlayWindow) createPersistentOverlay();
 
-        // 1. Capture
-        const imgBuffer = await screenshot({ format: 'png' });
-        const dataUrl = `data:image/png;base64,${imgBuffer.toString('base64')}`;
+        // 1. Capture using desktopCapturer
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width, height } = primaryDisplay.bounds;
+        const scaleFactor = primaryDisplay.scaleFactor;
+        
+        const sources = await desktopCapturer.getSources({ 
+            types: ['screen'], 
+            thumbnailSize: { width: width * scaleFactor, height: height * scaleFactor } 
+        });
+        
+        let primarySource = sources.find(s => s.display_id === primaryDisplay.id.toString());
+        if (!primarySource) primarySource = sources[0];
+
+        const dataUrl = primarySource.thumbnail.toDataURL();
 
         // 2. Load Image & Show
         overlayWindow.webContents.send('show-overlay', dataUrl);
@@ -193,6 +203,7 @@ ipcMain.handle('start-picking', async () => {
 
     } catch (e) {
         console.error('Capture failed', e);
+        if (mainWindow) mainWindow.webContents.send('stop-picking-ui');
     }
 });
 

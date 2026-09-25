@@ -97,7 +97,7 @@ const ColorWidget = ({ onMinimize }) => {
         });
         const removeStartUI = window.electronAPI.onStartPickingUI ? window.electronAPI.onStartPickingUI(() => { setIsPicking(true); }) : () => {};
         const removeStopUI = window.electronAPI.onStopPickingUI(() => { setIsPicking(false); });
-        return () => { };
+        return () => { if(removeHover) removeHover(); if(removeSelected) removeSelected(); if(removeStartUI) removeStartUI(); if(removeStopUI) removeStopUI(); };
     }, [isPicking]);
 
     const togglePicking = async (e) => {
@@ -482,6 +482,40 @@ const ColorWidget = ({ onMinimize }) => {
                     onClick={() => { if (history.length > 0) copyToClipboard(color, 'main'); }}
                     title={history.length === 0 ? "" : "Cliquez pour copier"}
                 >
+                    {isGradientColor && extractedColors.length > 0 && (
+                        <div className="absolute bottom-1 w-full flex justify-center gap-1 z-20" onClick={(e) => e.stopPropagation()}>
+                            {extractedColors.map((c, i) => (
+                                <div
+                                    key={i}
+                                    draggable
+                                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', i.toString()); }}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                                        const toIndex = i;
+                                        if (fromIndex !== toIndex && !isNaN(fromIndex)) {
+                                            const newColors = [...extractedColors];
+                                            const [moved] = newColors.splice(fromIndex, 1);
+                                            newColors.splice(toIndex, 0, moved);
+                                            const newGradient = `linear-gradient(90deg, ${newColors.join(', ')})`;
+                                            setColor(newGradient);
+                                            setHistory(prev => prev.map(item => {
+                                                const itemHex = typeof item === 'object' ? item.hex : item;
+                                                if (itemHex === color) {
+                                                    return { ...item, hex: newGradient, colors: newColors };
+                                                }
+                                                return item;
+                                            }));
+                                        }
+                                    }}
+                                    className="w-5 h-5 rounded-full border-2 border-white shadow-md cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
+                                    style={{ backgroundColor: c }}
+                                    title="Glisser pour réorganiser"
+                                />
+                            ))}
+                        </div>
+                    )}
                     {/* Pipette Button */}
                     <div className="absolute top-2 left-2 z-10" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -528,10 +562,10 @@ const ColorWidget = ({ onMinimize }) => {
             {/* Color Codes Grid */}
             <div className="p-3 space-y-2 bg-gray-50 dark:bg-neutral-900 border-b border-gray-200 dark:border-neutral-700 flex-shrink-0">
                 <div className="grid grid-cols-2 gap-2">
-                    <ColorCard label="HEX" value={isGradientColor ? 'N/A' : color.toUpperCase()} />
-                    <ColorCard label="RGB" value={isGradientColor ? 'N/A' : `${rgb.r}, ${rgb.g}, ${rgb.b}`} />
-                    <ColorCard label="HSL" value={isGradientColor ? 'N/A' : `${hsl.h}°, ${hsl.s}%, ${hsl.l}%`} />
-                    <ColorCard label="CMYK" value={isGradientColor ? 'N/A' : `${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%`} />
+                    <ColorCard label="HEX" value={hexVal} />
+                    <ColorCard label="RGB" value={rgbVal} />
+                    <ColorCard label="HSL" value={hslVal} />
+                    <ColorCard label="CMYK" value={cmykVal} />
                 </div>
             </div>
 
@@ -550,6 +584,31 @@ const ColorWidget = ({ onMinimize }) => {
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 3.75V10.5H4.5V3.75h12zm2.25 0l-5.25-5.25H6a2.25 2.25 0 00-2.25 2.25v15A2.25 2.25 0 006 21h12a2.25 2.25 0 002.25-2.25V6zM15 16.5v3.75H9V16.5h6z" /></svg>
                             </button>
+                        )}
+
+                        {/* 3 dots menu when colors are selected */}
+                        {gradientSelection.length > 0 && (
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowSelectionMenu(!showSelectionMenu)}
+                                    className="p-1.5 bg-blue-100 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-full text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors shadow-sm"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" /></svg>
+                                </button>
+                                {showSelectionMenu && (
+                                    <div className="absolute top-8 right-0 z-50 bg-white dark:bg-neutral-800 rounded-lg shadow-xl border border-gray-200 dark:border-neutral-700 py-1 w-48 flex flex-col animate-in fade-in zoom-in-95 duration-100">
+                                        <button onClick={() => { handleCreateGradient(); setShowSelectionMenu(false); }} className="px-3 py-2 text-left text-xs text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-neutral-700">
+                                            {t('createGradient', 'Créer un dégradé')}
+                                        </button>
+                                        <button onClick={handleBulkDelete} className="px-3 py-2 text-left text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20">
+                                            {t('deleteSelection', 'Supprimer la sélection')}
+                                        </button>
+                                        <button onClick={() => { setGradientSelection([]); setShowSelectionMenu(false); }} className="px-3 py-2 text-left text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-neutral-700">
+                                            {t('cancel', 'Annuler')}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                         )}
 
                         {/* Load Palettes Button */}

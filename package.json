@@ -1,7 +1,7 @@
 {
   "name": "color-picker-pro",
   "private": true,
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "A modern desktop color picker - Pro edition",
   "author": "Bweb-Studio",
   "type": "module",
@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "dist": "vite build && electron-builder"
+    "dist": "vite build && electron-builder -p always"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

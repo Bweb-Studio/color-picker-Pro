@@ -59,6 +59,7 @@ const Overlay = () => {
             const pixel = ctx.getImageData(x, y, 1, 1).data;
             const hex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
             window.electronAPI.colorPicked(hex);
+            window.electronAPI.stopPicking();
         }
     };
 

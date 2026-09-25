@@ -1,0 +1,362 @@
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, dialog, desktopCapturer } = require('electron');
+const path = require('path');
+const screenshot = require('screenshot-desktop');
+const { autoUpdater } = require('electron-updater');
+
+// Configure auto-updater
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+let mainWindow;
+let overlayWindow;
+
+// --- STATE ---
+let isMinimized = false;
+let expandedBounds = { x: null, y: null, width: 340, height: 600 };
+let minimizedBounds = { x: null, y: null, width: 60, height: 60 };
+
+function createWindow() {
+    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+
+    // Defaults
+    expandedBounds.x = width - 360;
+    expandedBounds.y = height - 600 - 50;
+    minimizedBounds.x = width - 80;
+    minimizedBounds.y = height - 80;
+
+    // Determine icon path for production vs dev
+    const iconPath = !app.isPackaged
+        ? path.join(__dirname, '../public/icon.ico')
+        : path.join(process.resourcesPath, 'icon.ico');
+
+    // Load icon using nativeImage for better Windows compatibility
+    const { nativeImage } = require('electron');
+    let appIcon = null;
+    try {
+        appIcon = nativeImage.createFromPath(iconPath);
+        if (appIcon.isEmpty()) {
+            console.log('Icon not found at:', iconPath);
+        }
+    } catch (e) {
+        console.log('Error loading icon:', e);
+    }
+
+    mainWindow = new BrowserWindow({
+        width: expandedBounds.width,
+        height: expandedBounds.height,
+        x: expandedBounds.x,
+        y: expandedBounds.y,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        alwaysOnTop: true, // BASE LEVEL
+        skipTaskbar: false,
+        icon: appIcon || iconPath, // Custom icon for taskbar
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            nodeIntegration: false,
+            contextIsolation: true
+        }
+    });
+
+    const startUrl = !app.isPackaged
+        ? 'http://localhost:5173'
+        : `file://${path.join(app.getAppPath(), 'dist', 'index.html')}`;
+
+    mainWindow.loadURL(startUrl);
+
+    // --- PERSISTENT OVERLAY CREATION ---
+    createPersistentOverlay();
+
+    // Position Tracking
+    mainWindow.on('move', () => {
+        try {
+            const [x, y] = mainWindow.getPosition();
+            if (isMinimized) {
+                minimizedBounds.x = x;
+                minimizedBounds.y = y;
+            } else {
+                expandedBounds.x = x;
+                expandedBounds.y = y;
+            }
+        } catch (e) { }
+    });
+
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+        app.quit();
+    });
+}
+
+function createPersistentOverlay() {
+    const { width, height } = screen.getPrimaryDisplay().bounds;
+
+    overlayWindow = new BrowserWindow({
+        width, height,
+        x: 0, y: 0,
+        transparent: true,
+        frame: false,
+        fullscreen: true,
+        show: false, // HIDDEN BY DEFAULT
+        skipTaskbar: true,
+        resizable: false,
+        movable: false,
+        alwaysOnTop: true,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            nodeIntegration: false,
+            contextIsolation: true
+        }
+    });
+
+    const url = !app.isPackaged
+        ? 'http://localhost:5173/#/overlay'
+        : `file://${path.join(app.getAppPath(), 'dist', 'index.html')}#/overlay`;
+    overlayWindow.loadURL(url);
+
+    // Prevent closing, just hide
+    overlayWindow.on('close', (e) => {
+        if (mainWindow) {
+            e.preventDefault();
+            overlayWindow.hide();
+            return false;
+        }
+    });
+}
+
+
+// --- IPC COMMANDS ---
+
+// MODE
+ipcMain.handle('set-mode', (event, mode) => {
+    if (!mainWindow) return;
+    try {
+        if (mode === 'minimized') {
+            isMinimized = true;
+            const x = Math.round(minimizedBounds.x || 0);
+            const y = Math.round(minimizedBounds.y || 0);
+            mainWindow.setBounds({ x, y, width: 60, height: 60 });
+        } else {
+            isMinimized = false;
+            const x = Math.round(expandedBounds.x || 0);
+            const y = Math.round(expandedBounds.y || 0);
+            mainWindow.setBounds({ x, y, width: 340, height: 600 });
+        }
+    } catch (e) { }
+});
+
+ipcMain.on('window-move', (event, { x, y }) => {
+    if (!mainWindow) return;
+    try {
+        const dx = Math.round(Number(x));
+        const dy = Math.round(Number(y));
+        if (isNaN(dx) || isNaN(dy)) return;
+
+        const [currX, currY] = mainWindow.getPosition();
+        mainWindow.setPosition(currX + dx, currY + dy);
+
+        // Sync
+        if (isMinimized) { minimizedBounds.x = currX + dx; minimizedBounds.y = currY + dy; }
+        else { expandedBounds.x = currX + dx; expandedBounds.y = currY + dy; }
+    } catch (e) { }
+});
+
+ipcMain.handle('minimize-app', () => {
+    if (overlayWindow) overlayWindow.hide();
+    mainWindow?.minimize();
+});
+ipcMain.handle('close-app', () => { app.quit(); });
+
+
+// PICKING LOGIC
+async function executeStartPicking() {
+    try {
+        if (!overlayWindow) createPersistentOverlay();
+
+        // 1. Capture using desktopCapturer
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width, height } = primaryDisplay.bounds;
+        const scaleFactor = primaryDisplay.scaleFactor;
+        
+        const sources = await desktopCapturer.getSources({ 
+            types: ['screen'], 
+            thumbnailSize: { width: width * scaleFactor, height: height * scaleFactor } 
+        });
+        
+        let primarySource = sources.find(s => s.display_id === primaryDisplay.id.toString());
+        if (!primarySource) primarySource = sources[0];
+
+        const dataUrl = primarySource.thumbnail.toDataURL();
+
+        // 2. Load Image & Show
+        overlayWindow.webContents.send('show-overlay', dataUrl);
+
+        // Force TOP-MOST level
+        overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+        overlayWindow.show();
+        overlayWindow.focus();
+
+        // Ensure Main Window is ABOVE overlay
+        if (mainWindow) {
+            mainWindow.setAlwaysOnTop(true, 'screen-saver');
+            mainWindow.moveTop();
+            mainWindow.webContents.send('start-picking-ui'); // Tell frontend picking started
+        }
+
+    } catch (e) {
+        console.error('Capture failed', e);
+        if (mainWindow) mainWindow.webContents.send('stop-picking-ui');
+    }
+}
+
+function executeStopPicking() {
+    if (overlayWindow) {
+        overlayWindow.hide();
+    }
+    if (mainWindow) {
+        mainWindow.setAlwaysOnTop(true, 'normal'); // Reset
+        mainWindow.focus(); // FOCUS to allow Space-Start
+        mainWindow.webContents.send('stop-picking-ui'); // Tell frontend picking stopped
+    }
+}
+
+ipcMain.handle('start-picking', () => executeStartPicking());
+ipcMain.handle('stop-picking', () => executeStopPicking());
+
+// COLOR
+ipcMain.handle('color-picked', (event, hex) => {
+    if (mainWindow) mainWindow.webContents.send('color-selected', hex);
+});
+
+ipcMain.on('hover-color', (event, hex) => {
+    if (mainWindow) mainWindow.webContents.send('color-hover', hex);
+});
+
+// --- GLOBAL SHORTCUTS ---
+app.whenReady().then(() => {
+    createWindow();
+
+    // SAFETY NET: ESC closes overlay
+    globalShortcut.register('Escape', () => {
+        if (overlayWindow && overlayWindow.isVisible()) {
+            executeStopPicking();
+        }
+    });
+
+    // GLOBAL SHORTCUT: Ctrl+Shift+Space to toggle picking
+    globalShortcut.register('CommandOrControl+Shift+Space', () => {
+        if (overlayWindow && overlayWindow.isVisible()) {
+            executeStopPicking();
+        } else {
+            executeStartPicking();
+        }
+    });
+});
+
+app.on('will-quit', () => globalShortcut.unregisterAll());
+
+// Fix for windows leaving stray processes
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+});
+
+// --- AUTO-UPDATE ---
+const locales = {
+    en: {
+        updateAvailableTitle: 'Update Available',
+        updateAvailableMsg: (ver) => `A new version (${ver}) is available!`,
+        updateAvailableDetail: 'Would you like to download it now?',
+        downloadBtn: 'Download',
+        laterBtn: 'Later',
+        updateReadyTitle: 'Update Ready',
+        updateReadyMsg: 'The update has been downloaded.',
+        updateReadyDetail: 'The application will restart to install the update.',
+        restartBtn: 'Restart Now'
+    },
+    fr: {
+        updateAvailableTitle: 'Mise à jour disponible',
+        updateAvailableMsg: (ver) => `Une nouvelle version (${ver}) est disponible !`,
+        updateAvailableDetail: 'Voulez-vous la télécharger maintenant ?',
+        downloadBtn: 'Télécharger',
+        laterBtn: 'Plus tard',
+        updateReadyTitle: 'Mise à jour prête',
+        updateReadyMsg: 'La mise à jour a été téléchargée.',
+        updateReadyDetail: "L'application va redémarrer pour installer la mise à jour.",
+        restartBtn: 'Redémarrer maintenant'
+    },
+    es: {
+        updateAvailableTitle: 'Actualización Disponible',
+        updateAvailableMsg: (ver) => `¡Una nueva versión (${ver}) está disponible!`,
+        updateAvailableDetail: '¿Desea descargarla ahora?',
+        downloadBtn: 'Descargar',
+        laterBtn: 'Más tarde',
+        updateReadyTitle: 'Actualización Lista',
+        updateReadyMsg: 'La actualización se ha descargado.',
+        updateReadyDetail: 'La aplicación se reiniciará para instalar la actualización.',
+        restartBtn: 'Reiniciar Ahora'
+    },
+    de: {
+        updateAvailableTitle: 'Update Verfügbar',
+        updateAvailableMsg: (ver) => `Eine neue Version (${ver}) ist verfügbar!`,
+        updateAvailableDetail: 'Möchten Sie sie jetzt herunterladen?',
+        downloadBtn: 'Herunterladen',
+        laterBtn: 'Später',
+        updateReadyTitle: 'Update Bereit',
+        updateReadyMsg: 'Das Update wurde heruntergeladen.',
+        updateReadyDetail: 'Die Anwendung wird neu gestartet, um das Update zu installieren.',
+        restartBtn: 'Jetzt Neustarten'
+    }
+};
+
+const getTranslation = () => {
+    let lang = app.getLocale().substring(0, 2);
+    if (!locales[lang]) lang = 'en';
+    return locales[lang];
+};
+
+autoUpdater.on('update-available', (info) => {
+    const t = getTranslation();
+    dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: t.updateAvailableTitle,
+        message: t.updateAvailableMsg(info.version),
+        detail: t.updateAvailableDetail,
+        buttons: [t.downloadBtn, t.laterBtn],
+        defaultId: 0,
+        cancelId: 1
+    }).then(result => {
+        if (result.response === 0) {
+            autoUpdater.downloadUpdate();
+        }
+    });
+});
+
+autoUpdater.on('update-downloaded', () => {
+    const t = getTranslation();
+    dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: t.updateReadyTitle,
+        message: t.updateReadyMsg,
+        detail: t.updateReadyDetail,
+        buttons: [t.restartBtn, t.laterBtn],
+        defaultId: 0,
+        cancelId: 1
+    }).then(result => {
+        if (result.response === 0) {
+            autoUpdater.quitAndInstall();
+        }
+    });
+});
+
+autoUpdater.on('error', (err) => {
+    console.error('Erreur de mise à jour:', err);
+});
+
+// Check for updates after app start (only in production)
+app.on('ready', () => {
+    if (app.isPackaged) {
+        setTimeout(() => {
+            autoUpdater.checkForUpdates();
+        }, 3000); // Wait 3 seconds after launch
+    }
+});

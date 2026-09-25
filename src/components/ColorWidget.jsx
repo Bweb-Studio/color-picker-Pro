@@ -327,6 +327,30 @@ const ColorWidget = ({ onMinimize }) => {
     const colorName = !isGradientColor ? getColorName(color) : 'Dégradé CSS';
     const textColor = !isGradientColor ? getContrastColor(color) : 'white'; // Default white for gradient text
 
+    // Extract colors from gradient string for DnD and display
+    const extractedColors = isGradientColor
+        ? (color.match(/#[0-9a-fA-F]{6}/g) || [])
+        : [];
+
+    // Computed color values for the grid
+    const hexVal = isGradientColor ? color : color;
+    const rgbVal = isGradientColor ? color : `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+    const hslVal = isGradientColor ? color : `hsl(${hsl.h}°, ${hsl.s}%, ${hsl.l}%)`;
+    const cmykVal = isGradientColor ? color : `cmyk(${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%)`;
+
+    const handleCreateGradient = () => {
+        createGradient();
+    };
+
+    const handleBulkDelete = () => {
+        setHistory(prev => prev.filter(item => {
+            const h = typeof item === 'object' ? item.hex : item;
+            return !gradientSelection.includes(h);
+        }));
+        setGradientSelection([]);
+        setShowSelectionMenu(false);
+    };
+
     const ColorCard = ({ label, value }) => (
         <div
             onClick={() => copyToClipboard(value, label)}

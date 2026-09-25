@@ -31,6 +31,7 @@ const ColorWidget = ({ onMinimize }) => {
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saveName, setSaveName] = useState('');
     const [showResetModal, setShowResetModal] = useState(false);
+    const [showSelectionMenu, setShowSelectionMenu] = useState(false);
 
     // NEW FEATURES STATE
     const [gradientSelection, setGradientSelection] = useState([]);
@@ -547,7 +548,7 @@ const ColorWidget = ({ onMinimize }) => {
                                 className="p-1.5 bg-white dark:bg-neutral-700 border border-gray-200 dark:border-neutral-600 rounded-full text-gray-500 dark:text-gray-300 hover:text-green-500 hover:border-green-200 transition-colors shadow-sm"
                                 title={t('savePalette', 'Sauvegarder la palette')}
                             >
-                                <BookmarkIcon className="w-3.5 h-3.5" />
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 3.75V10.5H4.5V3.75h12zm2.25 0l-5.25-5.25H6a2.25 2.25 0 00-2.25 2.25v15A2.25 2.25 0 006 21h12a2.25 2.25 0 002.25-2.25V6zM15 16.5v3.75H9V16.5h6z" /></svg>
                             </button>
                         )}
 

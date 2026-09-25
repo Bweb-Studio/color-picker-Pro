@@ -1,7 +1,7 @@
 {
   "name": "color-picker-pro",
   "private": true,
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "A modern desktop color picker - Pro edition",
   "author": "Bweb-Studio",
   "type": "module",
